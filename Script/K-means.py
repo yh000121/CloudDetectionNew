@@ -134,7 +134,7 @@ def main():
         image_folders = ["image_001", "image_002", "image_003", "image_004", "image_005"]
         print("Using default image folder names.")
 
-    pca_data, _ = load_data(datasets_dir)                                                                                                                                                                                                                                                                                                                                                                                                               
+    pca_data, _ = load_data(datasets_dir)
     cluster_labels, image_shapes = perform_kmeans(pca_data, n_clusters=3)
     save_individual_cluster_images(cluster_labels, image_shapes, image_folders, results_dir)
     evaluate_kmeans(cluster_labels, datasets_dir)
