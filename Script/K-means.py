@@ -2,8 +2,8 @@ import os
 import numpy as np
 from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
 from collections import Counter
-
 
 def load_data(datasets_dir):
     """
@@ -33,14 +33,12 @@ def perform_kmeans(pca_data, n_clusters=3):
     image_shapes = []
     flattened_features = []
 
-    # Reshape each image and store its dimensions.
     for i in range(num_images):
         img = pca_data[i]
         h, w, _ = img.shape
         image_shapes.append((h, w))
         flattened_features.append(img.reshape(-1, 3))
 
-    # Concatenate all image pixels into one array.
     flattened_features = np.concatenate(flattened_features, axis=0)
     print(f"Running KMeans on {flattened_features.shape[0]} pixels with {n_clusters} clusters...")
 
@@ -49,19 +47,41 @@ def perform_kmeans(pca_data, n_clusters=3):
     return cluster_labels, image_shapes
 
 
-def save_individual_cluster_images(cluster_labels, image_shapes, image_folders, results_dir):
+def save_individual_cluster_images(cluster_labels, image_shapes, image_folders, results_dir, mapping):
     """
-    Reshape cluster labels back to image dimensions and save as images.
+    Reshape cluster labels back to image dimensions and save as images with semantic coloring.
+    mapping: dict from cluster label to class index
     """
     kmeans_results_dir = os.path.join(results_dir, "kmeans")
     os.makedirs(kmeans_results_dir, exist_ok=True)
+
+    # Define semantic class names and colormap
+    class_names = ['Sea', 'Ice', 'Cloud']
+    cmap = ListedColormap(['blue', 'lightblue', 'white'])
 
     start = 0
     for i, (h, w) in enumerate(image_shapes):
         end = start + h * w
         labels_img = cluster_labels[start:end].reshape(h, w)
+
+        # Map raw cluster labels → semantic class indices
+        mapped = np.vectorize(mapping.get)(labels_img)
+
+        # Create figure with colorbar and class labels
+        fig, ax = plt.subplots(figsize=(6, 6))
+        im = ax.imshow(mapped, cmap=cmap)
+        ax.set_title(f"{image_folders[i]} Classification Map")  # 图标题
+
+        # 设置 colorbar 并用 class_names 作为标签
+        cbar = fig.colorbar(im, ax=ax, ticks=range(len(class_names)))
+        cbar.ax.set_yticklabels(class_names)
+        ax.axis('off')
+
+        # Save figure
         filename = os.path.join(kmeans_results_dir, f"{image_folders[i]}_clusters.png")
-        plt.imsave(filename, labels_img, cmap='viridis')
+        fig.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+
         print(f"Saved {image_folders[i]}'s clustering result to {filename}.")
         start = end
 
@@ -69,7 +89,7 @@ def save_individual_cluster_images(cluster_labels, image_shapes, image_folders, 
 def evaluate_kmeans(cluster_labels, datasets_dir):
     """
     Evaluate K-means clustering by finding an optimal one-to-one mapping between clusters and manual labels.
-    Computes accuracy, precision, F1 score, confusion matrix, and prints a classification report.
+    Returns the optimal mapping.
     """
     import os
     import numpy as np
@@ -79,33 +99,26 @@ def evaluate_kmeans(cluster_labels, datasets_dir):
     manual_labels_path = os.path.join(datasets_dir, "all_labels.npy")
     manual_labels = np.load(manual_labels_path, allow_pickle=True)
 
-    # Filter out unlabeled pixels (-1 indicates no label)
     valid_mask = (manual_labels != -1)
     valid_manual_labels = manual_labels[valid_mask]
     valid_cluster_labels = cluster_labels[valid_mask]
     total = valid_manual_labels.shape[0]
     if total == 0:
         print("No valid manual labels found (all are -1).")
-        return
+        return {}
 
-    # Build confusion matrix: rows = predicted clusters, columns = true labels
     cm = confusion_matrix(valid_cluster_labels, valid_manual_labels)
-
-    # Use Hungarian algorithm on the negative of confusion matrix to maximize the matching count.
     row_ind, col_ind = linear_sum_assignment(-cm)
     optimal_mapping = {row: col for row, col in zip(row_ind, col_ind)}
 
-    # Remap cluster labels to predicted labels using the optimal mapping
     mapped_predicted_labels = np.array([optimal_mapping.get(cl, -1) for cl in valid_cluster_labels])
 
-    # Compute evaluation metrics
     accuracy = accuracy_score(valid_manual_labels, mapped_predicted_labels)
     precision = precision_score(valid_manual_labels, mapped_predicted_labels, average='macro')
     f1 = f1_score(valid_manual_labels, mapped_predicted_labels, average='macro')
     new_cm = confusion_matrix(valid_manual_labels, mapped_predicted_labels)
     report = classification_report(valid_manual_labels, mapped_predicted_labels, digits=4)
 
-    # Print mapping info and evaluation metrics
     print("Optimal cluster to manual label mapping (via Hungarian algorithm):")
     for cl, label in optimal_mapping.items():
         print(f"  Cluster {cl} -> Label {label}")
@@ -118,15 +131,13 @@ def evaluate_kmeans(cluster_labels, datasets_dir):
     print("Classification Report:")
     print(report)
 
+    return optimal_mapping
+
 
 def main():
-    """
-    Load data, perform K-means clustering, save cluster images, and evaluate clustering.
-    """
     datasets_dir = os.path.join("..", "datasets")
     results_dir = os.path.join("..", "results")
 
-    # Retrieve image folder names.
     image_folders_path = os.path.join(datasets_dir, "image_folders.npy")
     if os.path.exists(image_folders_path):
         image_folders = np.load(image_folders_path, allow_pickle=True).tolist()
@@ -136,10 +147,12 @@ def main():
 
     pca_data, _ = load_data(datasets_dir)
     cluster_labels, image_shapes = perform_kmeans(pca_data, n_clusters=3)
-    save_individual_cluster_images(cluster_labels, image_shapes, image_folders, results_dir)
-    evaluate_kmeans(cluster_labels, datasets_dir)
+    optimal_mapping = evaluate_kmeans(cluster_labels, datasets_dir)
+    if not optimal_mapping:
+        print("Skipping image generation due to lack of mapping.")
+    else:
+        save_individual_cluster_images(cluster_labels, image_shapes, image_folders, results_dir, optimal_mapping)
 
-    # Save overall cluster labels for further use.
     kmeans_results_dir = os.path.join(results_dir, "kmeans")
     os.makedirs(kmeans_results_dir, exist_ok=True)
     cluster_labels_path = os.path.join(kmeans_results_dir, "kmeans_clustered.npy")
